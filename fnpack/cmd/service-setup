@@ -1,0 +1,205 @@
+#!/bin/bash
+# ---------------------------------------------------------------------------
+# Open-Box fnOS service setup
+#
+# Payload layout (extracted from app.tgz into $TRIM_APPDEST):
+#   bin/sing-box                 sing-box kernel (per-arch)
+#   node/bin/node                glibc Node runtime (per-arch)
+#   panel/                       Node management panel (relocatable via OPENBOX_ROOT)
+#   debian/bin/openbox-ctl       kernel service control (no systemd; direct process mgmt)
+#   debian/bin/openbox-panel-ctl panel service control
+#   debian/bin/openbox-panel-run panel launcher (port/heap/env)
+#   debian/bin/openbox-supervise fnOS service supervisor (single SERVICE_COMMAND)
+#   openwrt/bin/open-box        CLI (password / port / check)
+#   update.sh / uninstall.sh    stubs (upgrades go through the fnOS app center)
+#
+# Data layout ($TRIM_PKGVAR = /vol1/@appdata/fnnas.openbox):
+#   data/   panel sqlite, subscriptions, rulesets, panel-port, kernel pid ...
+#   etc/    generated sing-box config.json, entry-bypass.nft, certs
+#   geodata/ GeoIP/GeoSite .srs (symlinked from panel/server/resources/geodata)
+#
+# OPENBOX_ROOT points at $TRIM_APPDEST; etc/ data/ and geodata are symlinks
+# into $TRIM_PKGVAR so upgrades (which replace the app dir) never touch
+# user data.
+# ---------------------------------------------------------------------------
+
+APP_DIR="${TRIM_APPDEST}"
+APP_DATA_DIR="${TRIM_PKGVAR}"
+
+export OPENBOX_ROOT="${APP_DIR}"
+
+LOG_FILE="${TRIM_PKGVAR}/openbox.log"
+PID_FILE="${TRIM_PKGVAR}/openbox.pid"
+
+PANEL_PORT_DEFAULT=3036
+
+# Single-line service command: the supervisor starts the panel (always) and
+# the kernel (when autostart is on), and traps SIGTERM to stop panel + kernel
+# + restore nftables / ip rules / ip_forward. IMPORTANT: no trailing "&" —
+# fnOS backgrounds this line itself and tracks $! in the PID file.
+SERVICE_COMMAND="${APP_DIR}/debian/bin/openbox-supervise"
+
+# ── Helpers ───────────────────────────────────────────────────────────────
+ob_panel_port()
+{
+    local p
+    p=$(cat "${APP_DATA_DIR}/data/panel-port" 2>/dev/null | tr -dc '0-9')
+    printf '%s\n' "${p:-${PANEL_PORT_DEFAULT}}"
+}
+
+ob_sync_ui_port()
+{
+    # Keep the fnOS desktop iframe entry in sync with the actual panel port.
+    local port="$1"
+    local uicfg="${APP_DIR}/ui/config"
+    [ -f "$uicfg" ] || return 0
+    sed -i "s/\"port\": \"[0-9]*\"/\"port\": \"${port}\"/" "$uicfg" 2>/dev/null || true
+}
+
+ob_link_data_dirs()
+{
+    # etc/ and data/ live in the persistent appdata dir; the app dir only
+    # carries symlinks. Recreated on every install/upgrade (the app dir is
+    # replaced wholesale by fnOS on upgrade).
+    $MKDIR "${APP_DATA_DIR}/data" "${APP_DATA_DIR}/etc" 2>/dev/null || true
+    ln -sfn "${APP_DATA_DIR}/data" "${APP_DIR}/data" 2>/dev/null || true
+    ln -sfn "${APP_DATA_DIR}/etc"  "${APP_DIR}/etc"  2>/dev/null || true
+
+    # Geodata ships inside the package; move it into appdata and symlink so
+    # kernel/GEO updates (via fpk upgrades) refresh it without touching
+    # anything else in the data dir.
+    local geo_src="${APP_DIR}/panel/server/resources/geodata"
+    local geo_dst="${APP_DATA_DIR}/geodata"
+    if [ -d "$geo_src" ] && [ ! -L "$geo_src" ]; then
+        rm -rf "$geo_dst" 2>/dev/null || true
+        mv "$geo_src" "$geo_dst" 2>/dev/null || true
+    fi
+    [ -d "$geo_dst" ] && ln -sfn "$geo_dst" "$geo_src" 2>/dev/null || true
+}
+
+ob_seed_defaults()
+{
+    # panel-port: wizard value on fresh install, preserved on upgrade.
+    if [ ! -f "${APP_DATA_DIR}/data/panel-port" ]; then
+        local port="${wizard_panel_port:-}"
+        port=$(printf '%s' "$port" | tr -dc '0-9')
+        [ -n "$port" ] || port="$PANEL_PORT_DEFAULT"
+        printf '%s\n' "$port" > "${APP_DATA_DIR}/data/panel-port" 2>/dev/null || true
+    fi
+    # channel file: read by the panel's update status card (updates are
+    # stubbed on fnOS, but keep the file consistent with upstream layout).
+    if [ ! -f "${APP_DATA_DIR}/data/channel" ]; then
+        printf 'direct\n' > "${APP_DATA_DIR}/data/channel" 2>/dev/null || true
+    fi
+}
+
+ob_stop_everything()
+{
+    # Stop kernel (also restores nft table / ip rules / ip_forward) and the
+    # panel/supervisor. Used by uninstall and as a post-stop backstop.
+    if [ -x "${APP_DIR}/debian/bin/openbox-ctl" ]; then
+        OPENBOX_ROOT="${APP_DIR}" "${APP_DIR}/debian/bin/openbox-ctl" stop >> "${LOG_FILE}" 2>&1 || true
+    fi
+    pkill -x sing-box 2>/dev/null || true
+    pkill -f 'panel/server/index.mjs' 2>/dev/null || true
+    pkill -f 'debian/bin/openbox-supervise' 2>/dev/null || true
+    # 同源网关（自重启子壳 + node 本体）
+    pkill -f 'debian/bin/openbox-gateway' 2>/dev/null || true
+    if [ -f "${APP_DATA_DIR}/data/gateway.pid" ]; then
+        kill "$(cat "${APP_DATA_DIR}/data/gateway.pid")" 2>/dev/null || true
+    fi
+    rm -f "${APP_DATA_DIR}/data/sing-box.pid" "${APP_DATA_DIR}/data/panel.pid" "${APP_DATA_DIR}/data/supervise.pid" "${APP_DATA_DIR}/data/gateway.pid" "${APP_DIR}/openbox.sock" 2>/dev/null || true
+}
+
+# ── Install / upgrade hooks ───────────────────────────────────────────────
+validate_preinst()
+{
+    # Refuse to clobber a foreign install of upstream Open-Box (/opt/open-box):
+    # its systemd units would fight with this app over ports and nftables.
+    if [ -d /opt/open-box ] && [ -f /opt/open-box/meta.json ]; then
+        error_exit "检测到 /opt/open-box 已安装上游 Open-Box。请先卸载它（curl -fsSL https://raw.githubusercontent.com/liandu2024/Open-Box/main/scripts/uninstall.sh | sh）再安装本应用，否则两者会争抢端口与防火墙规则。"
+    fi
+}
+
+service_preinst()
+{
+    $MKDIR "${APP_DATA_DIR}" 2>/dev/null || true
+}
+
+service_postinst()
+{
+    $MKDIR "${APP_DATA_DIR}/data" "${APP_DATA_DIR}/etc" 2>/dev/null || true
+
+    # Payload scripts must be executable (tar preserves modes, but be safe).
+    chmod +x "${APP_DIR}/debian/bin/"* 2>/dev/null || true
+    chmod +x "${APP_DIR}/openwrt/bin/open-box" 2>/dev/null || true
+    chmod +x "${APP_DIR}/bin/sing-box" 2>/dev/null || true
+    chmod +x "${APP_DIR}/node/bin/node" 2>/dev/null || true
+
+    ob_link_data_dirs
+    ob_seed_defaults
+
+    # Desktop iframe follows the panel port.
+    ob_sync_ui_port "$(ob_panel_port)"
+
+    # Data dir must be writable by the panel (runs as root, but keep the
+    # fnOS-consistent permissions so the file manager can browse it).
+    chmod -R a+rwX "${APP_DATA_DIR}" 2>/dev/null || true
+
+    fix_data_ownership 2>/dev/null || true
+
+    echo "Open-Box installed: root=${APP_DIR} data=${APP_DATA_DIR} panel_port=$(ob_panel_port)" >> "${LOG_FILE}"
+}
+
+validate_preupgrade()
+{
+    # Capture kernel state BEFORE fnOS stops the daemon: if the kernel was
+    # running we re-enable autostart in service_postupgrade so the supervisor
+    # brings it back after the upgrade.
+    if pgrep -x sing-box >/dev/null 2>&1; then
+        echo "on" > "${APP_DATA_DIR}/service.state" 2>/dev/null || true
+    else
+        echo "off" > "${APP_DATA_DIR}/service.state" 2>/dev/null || true
+    fi
+}
+
+service_postupgrade()
+{
+    service_postinst
+    # Kernel was running before the upgrade → make sure it comes back.
+    if [ "$(cat "${APP_DATA_DIR}/service.state" 2>/dev/null)" = "on" ]; then
+        : > "${APP_DATA_DIR}/data/core-autostart" 2>/dev/null || true
+        rm -f "${APP_DATA_DIR}/service.state" 2>/dev/null || true
+    fi
+}
+
+service_preuninst()
+{
+    ob_stop_everything
+}
+
+service_postuninst()
+{
+    # Final backstop: nothing of ours may survive an uninstall.
+    ob_stop_everything
+    rm -f "${APP_DIR}/data" "${APP_DIR}/etc" 2>/dev/null || true
+}
+
+service_poststop()
+{
+    # fnOS stopped the service (SIGTERM to the supervisor already ran its
+    # cleanup); this is the backstop for abnormal exits.
+    ob_stop_everything
+}
+
+service_preconfig()
+{
+    :
+}
+
+service_postconfig()
+{
+    # fnOS "config" (env var change) — nothing user-configurable at the fnOS
+    # level for Open-Box; everything lives in the panel.
+    :
+}

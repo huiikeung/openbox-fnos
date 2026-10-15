@@ -1,0 +1,64 @@
+#!/bin/sh
+# openbox-panel-run —— 面板启动器（fnOS 版）
+#
+# 由上游 debian/bin/openbox-panel-run 改编：
+#   · ROOT 取自 OPENBOX_ROOT，未设置时按脚本位置自定位（../../）；
+#   · 不再创建 /usr/local/bin/open-box 软链接（不污染系统目录，CLI 位于
+#     $ROOT/openwrt/bin/open-box）；
+#   · 端口兜底值 3036（fnOS 上没有 v0.1.216 及更早的老安装，不存在 2026）；
+#   · 每次启动把 ui/config 里的 iframe 端口同步成实际面板端口。
+#
+# v0.1.319 起（前置代理方案）：面板进程只听内网端口 3037，对外端口（panel-port）
+# 由 debian/bin/openbox-front.mjs 前置代理把守——它把 /api/fnoscf/* 分流给隧道
+# 助手、其余转给面板。原因：v0.1.326 起上游面板服务端是完整性清单保护的
+# minified bundle 不能打补丁，而 fnOS 应用中心/FN Connect 对 /api/* 的请求直达
+# 面板服务端口不过网关，隧道卡片的同源 API 必须在面板端口侧有入口。
+
+ROOT="${OPENBOX_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
+NODE="$ROOT/node/bin/node"
+ENTRY="$ROOT/panel/server/index.mjs"
+DATA="$ROOT/data"
+
+if [ ! -x "$NODE" ]; then
+	echo "openbox-panel: node runtime not found at $NODE" >&2
+	exit 1
+fi
+if [ ! -f "$ENTRY" ]; then
+	echo "openbox-panel: panel entry not found at $ENTRY" >&2
+	exit 1
+fi
+mkdir -p "$DATA"
+
+# 对外端口（fpk 声明/应用中心/iframe/ui/config 用的都是它）
+panel_port=$(cat "$DATA/panel-port" 2>/dev/null | tr -dc '0-9')
+[ -n "$panel_port" ] || panel_port=3036
+# 内网端口：面板进程实际监听 3037（前置代理把守对外端口）。三处约定必须一致：
+# openbox-panel-run / openbox-front.mjs / openbox-gateway.mjs。
+internal_port=3037
+if "$NODE" -e 'require("node:net").connect(Number(process.argv[1]),"127.0.0.1").on("connect",function(){process.exit(0)}).on("error",function(){process.exit(1)})' "$internal_port" 2>/dev/null; then
+	echo "openbox-panel: internal port $internal_port is already in use" >&2
+	exit 1
+fi
+# 堆上限的算法和上游一致（内存不到 768 MB 堆收紧到 128 MB）
+heap_mb=160
+mem_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null)
+[ -n "$mem_kb" ] && [ "$mem_kb" -lt 786432 ] && heap_mb=128
+
+# fnOS 桌面入口（ui/config）的端口跟随面板端口（改端口后重启面板即同步）
+if [ -f "$ROOT/ui/config" ]; then
+	sed -i "s/\"port\": \"[0-9]*\"/\"port\": \"$panel_port\"/" "$ROOT/ui/config" 2>/dev/null || true
+fi
+
+# HOST=:: 双栈（没开 IPv6 时面板自己退回 0.0.0.0）；
+# OPENSSL_CONF=/dev/null：不读系统的 OpenSSL 配置
+export PORT="$internal_port" HOST=:: OPENBOX_ROOT="$ROOT" OPENBOX_PANEL_HEAP_MB="$heap_mb" \
+	ZASHBOARD_DB_PATH="$DATA/openbox.sqlite" OPENBOX_PLATFORM=systemd OPENSSL_CONF=/dev/null
+unset LD_LIBRARY_PATH
+# 内核缺 madvise 的机器（上游 #290 #293）：安装时试出来要带兼容库记在 data/node-preload
+node_preload=$(cat "$DATA/node-preload" 2>/dev/null)
+if [ -n "$node_preload" ] && [ -f "$node_preload" ]; then
+	export LD_PRELOAD="$node_preload"
+else
+	unset LD_PRELOAD
+fi
+exec "$NODE" "--max-old-space-size=$heap_mb" "$ENTRY"

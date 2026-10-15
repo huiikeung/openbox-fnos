@@ -1,0 +1,19 @@
+#!/bin/bash
+# ---------------------------------------------------------------------------
+# Open-Box fnOS Installer — runs before install/upgrade to set up environment
+# ---------------------------------------------------------------------------
+
+INST_LOG="/var/log/apps/${TRIM_APPNAME}.log"
+
+COMMON=$(dirname $0)"/common"
+if [ -r "${COMMON}" ]; then
+    . "${COMMON}"
+fi
+
+SVC_SETUP=$(dirname $0)"/service-setup"
+if [ -r "${SVC_SETUP}" ]; then
+    . "${SVC_SETUP}"
+fi
+
+load_variables_from_file ${INST_VARIABLES}
+call_func "initialize_variables" install_log

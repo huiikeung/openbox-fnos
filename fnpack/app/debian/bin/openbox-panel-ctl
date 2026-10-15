@@ -1,0 +1,114 @@
+#!/bin/sh
+# Open-Box 面板服务控制（fnOS 版）
+#
+# 由上游 debian/bin/openbox-panel-ctl 改编：去掉 systemctl。fnOS 上面板进程由
+# debian/bin/openbox-supervise 监管（SERVICE_COMMAND 就是它），本脚本负责：
+#   status  —— 面板在不在（PID 文件 data/panel.pid）
+#   restart —— 杀掉面板进程，监管器 3 秒内重新拉起并重读 data/panel-port
+#               （open-box port 改端口后走这条；监管器不在时直接补起一个）
+#   stop    —— 停面板 = 停整个应用：杀面板 + 停监管器（监管器退出时会停内核
+#               并清理 nft / 策略路由 / 转发）
+#   start   —— 已运行 / 监管器在跑即成功；否则提示走 fnOS 应用中心
+#   enable / disable / enabled —— fnOS 应用开机自启由应用中心管理，恒成功
+# status 契约：running 退出码 0；inactive 退出码 3。
+
+ROOT="${OPENBOX_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
+DATA="$ROOT/data"
+PANEL_RUN="$ROOT/debian/bin/openbox-panel-run"
+PANEL_PIDFILE="$DATA/panel.pid"
+SUP_PIDFILE="$DATA/supervise.pid"
+CTL="$ROOT/debian/bin/openbox-ctl"
+
+_alive() {
+	[ -f "$1" ] || return 1
+	_p=$(tr -dc '0-9' < "$1" 2>/dev/null)
+	[ -n "$_p" ] || return 1
+	kill -0 "$_p" 2>/dev/null
+}
+
+panel_pid() {
+	_alive "$PANEL_PIDFILE" || return 1
+	tr -dc '0-9' < "$PANEL_PIDFILE" 2>/dev/null
+}
+
+_wait_gone() {
+	_pid="$1"; _n=0
+	while [ "$_n" -lt 10 ] && kill -0 "$_pid" 2>/dev/null; do
+		sleep 1
+		_n=$((_n + 1))
+	done
+	kill -0 "$_pid" 2>/dev/null && kill -KILL "$_pid" 2>/dev/null
+	return 0
+}
+
+case "$1" in
+	start)
+		if panel_pid >/dev/null; then
+			echo "running"
+			exit 0
+		fi
+		if _alive "$SUP_PIDFILE"; then
+			# 监管器会把面板拉起来（可能正在 3 秒重试间隔里）
+			echo "running"
+			exit 0
+		fi
+		echo "面板未运行且应用监管器不在。请通过 fnOS 应用中心启动 Open-Box。" >&2
+		exit 1
+		;;
+	stop)
+		# 先停面板，再停监管器；监管器退出时会停内核并做系统层清理。
+		if _p=$(panel_pid); then
+			kill -TERM "$_p" 2>/dev/null
+			_wait_gone "$_p"
+		fi
+		if _alive "$SUP_PIDFILE"; then
+			_s=$(tr -dc '0-9' < "$SUP_PIDFILE" 2>/dev/null)
+			kill -TERM "$_s" 2>/dev/null
+			_n=0
+			while [ "$_n" -lt 20 ] && kill -0 "$_s" 2>/dev/null; do
+				sleep 1
+				_n=$((_n + 1))
+			done
+			kill -0 "$_s" 2>/dev/null && kill -KILL "$_s" 2>/dev/null
+		fi
+		# 兜底：监管器异常退出时内核可能还在跑
+		"$CTL" stop >/dev/null 2>&1 || true
+		rm -f "$PANEL_PIDFILE" "$SUP_PIDFILE" 2>/dev/null || true
+		echo "inactive"
+		exit 0
+		;;
+	restart)
+		# 只重启面板进程：监管器重新拉起并读取新的 data/panel-port。
+		if _p=$(panel_pid); then
+			kill -TERM "$_p" 2>/dev/null
+			_wait_gone "$_p"
+		fi
+		if ! _alive "$SUP_PIDFILE"; then
+			# 监管器不在（异常）：直接补起一个面板进程
+			setsid "$PANEL_RUN" >> "$DATA/panel.log" 2>&1 &
+			_np=$!
+			printf '%s\n' "$_np" > "$PANEL_PIDFILE"
+		fi
+		echo "running"
+		exit 0
+		;;
+	enable|disable)
+		# fnOS 应用的开机自启由应用中心管理
+		exit 0
+		;;
+	enabled)
+		exit 0
+		;;
+	status)
+		if panel_pid >/dev/null; then
+			echo "running"
+			exit 0
+		fi
+		echo "inactive"
+		exit 3
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart|enable|disable|enabled|status}" >&2
+		exit 1
+		;;
+esac

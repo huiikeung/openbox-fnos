@@ -1,0 +1,224 @@
+#!/bin/sh
+# Open-Box sing-box 内核服务控制（fnOS 版）
+#
+# 由上游 debian/bin/openbox-ctl 改编：去掉 systemctl，直接管理 sing-box 进程；
+# pre-start / post-stop 的系统层动作（nft 表、策略路由、IP 转发、陈旧表清理）
+# 与上游逐函数保持一致，改一处记得对照上游。
+#
+# 面板（panel/server/system/service.mjs → system/deploy.mjs）只认这些动作：
+#   start / stop / restart / enable / disable / enabled / status
+# 外加 systemd 版的 ExecStartPre / ExecStopPost 对应的 pre-start / post-stop。
+# status 契约：在跑打印 running 退出码 0；没跑打印 inactive 退出码 3。
+
+ROOT="${OPENBOX_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
+BIN="$ROOT/bin/sing-box"
+CONF="$ROOT/etc/config.json"
+DATA="$ROOT/data"
+PIDFILE="$DATA/sing-box.pid"
+AUTOSTART="$DATA/core-autostart"
+KERNEL_LOG="$DATA/kernel.log"
+# sing-box 自己流量的 fwmark（tun 的 auto_redirect_output_mark 默认值）
+SINGBOX_OUTPUT_MARK=0x2024
+# Open-Box 的放行位（内核 tcp15 起认）
+OPENBOX_PASS_MARK=0x02000000
+NFT_TABLE="inet openbox"
+OPENBOX_MARK_RULE_PREF=8999
+OPENBOX_PASS_RULE_PREF=8998
+OPENBOX_PASS_SKIP_TO=9010
+OPENBOX_PASS_LAST_PREF=32767
+# 起内核前 ip_forward 的原值：是我们打开的才在停止时关回去
+FORWARD_STATE="$DATA/ip-forward.prev"
+# 进内核之前就放行的端口 / 终端：面板部署时生成的 nft 链正文
+ENTRY_BYPASS="$ROOT/etc/entry-bypass.nft"
+# 直连应答放行的开关文件（内核 tcp10 起）
+export OPENBOX_DIRECT_ANSWER_FLAG="$DATA/flip/direct-answer.on"
+
+mkdir -p "$DATA" 2>/dev/null || true
+
+# 进内核之前就放行的端口 / 终端（GitHub #183 #187）。只认规则里会出现的字符
+openbox_entry_bypass() {
+	[ -s "$ENTRY_BYPASS" ] || return 0
+	grep -q '[^A-Za-z0-9 	{}.,:;!="_@/-]' "$ENTRY_BYPASS" && return 0
+	cat "$ENTRY_BYPASS"
+}
+
+# Open-Box 自己的 nft 表（inet openbox），起内核前按需整张重建
+openbox_apply_nft() {
+	command -v nft >/dev/null 2>&1 || return 0
+	nft delete table $NFT_TABLE >/dev/null 2>&1
+	_ob_entry="$(openbox_entry_bypass)"
+	[ -n "$_ob_entry" ] || return 0
+	{
+		echo "table $NFT_TABLE {"
+		echo "$_ob_entry"
+		echo "}"
+	} | nft -f - >/dev/null 2>&1 || echo "openbox: failed to install nft table $NFT_TABLE" >&2
+}
+
+# auto_redirect 用到的内核模块，重启后没人加载，起内核前挨个 modprobe
+openbox_load_modules() {
+	for _ob_mod in tun nft_queue nft_nat nft_redir nft_tproxy nft_socket nft_fib_inet nft_ct; do
+		[ -d "/sys/module/$_ob_mod" ] || modprobe "$_ob_mod" >/dev/null 2>&1
+	done
+}
+
+# 内核的 auto_redirect 会自己建 inet sing-box 表，被强杀 / OOM 时不会删。
+# 只在没有任何 sing-box 在跑时才清
+openbox_clean_stale_nft() {
+	command -v nft >/dev/null 2>&1 || return 0
+	pgrep -x sing-box >/dev/null 2>&1 && return 0
+	nft list table inet sing-box >/dev/null 2>&1 || return 0
+	echo "openbox: removing stale nftables table left by a previous kernel run" >&2
+	nft delete table inet sing-box >/dev/null 2>&1
+	return 0
+}
+
+# 给内核自身流量的标记补一条终止查找的策略路由（GitHub #157），再给放行位补两条
+openbox_apply_mark_rule() {
+	command -v ip >/dev/null 2>&1 || return 0
+	openbox_clear_mark_rule
+	ip rule add pref $OPENBOX_MARK_RULE_PREF fwmark $SINGBOX_OUTPUT_MARK lookup main >/dev/null 2>&1
+	ip -6 rule add pref $OPENBOX_MARK_RULE_PREF fwmark $SINGBOX_OUTPUT_MARK lookup main >/dev/null 2>&1
+	for _ob_ip in "ip" "ip -6"; do
+		$_ob_ip rule add pref $OPENBOX_PASS_RULE_PREF fwmark $OPENBOX_PASS_MARK/$OPENBOX_PASS_MARK goto $OPENBOX_PASS_SKIP_TO >/dev/null 2>&1
+		$_ob_ip rule add pref $OPENBOX_PASS_LAST_PREF fwmark $OPENBOX_PASS_MARK/$OPENBOX_PASS_MARK unreachable >/dev/null 2>&1
+	done
+	return 0
+}
+
+openbox_clear_mark_rule() {
+	command -v ip >/dev/null 2>&1 || return 0
+	while ip rule del pref $OPENBOX_MARK_RULE_PREF >/dev/null 2>&1; do :; done
+	while ip -6 rule del pref $OPENBOX_MARK_RULE_PREF >/dev/null 2>&1; do :; done
+	for _ob_ip in "ip" "ip -6"; do
+		while $_ob_ip rule del pref $OPENBOX_PASS_RULE_PREF fwmark $OPENBOX_PASS_MARK/$OPENBOX_PASS_MARK >/dev/null 2>&1; do :; done
+		while $_ob_ip rule del pref $OPENBOX_PASS_LAST_PREF fwmark $OPENBOX_PASS_MARK/$OPENBOX_PASS_MARK unreachable >/dev/null 2>&1; do :; done
+	done
+	return 0
+}
+
+# 旁路由用法要靠转发：记下原值，停止时是我们开的才关回去
+openbox_enable_forward() {
+	_ob_v4="$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)"
+	if [ "$_ob_v4" = "0" ]; then
+		mkdir -p "$DATA"
+		printf 'ipv4=0\n' > "$FORWARD_STATE"
+		sysctl -q -w net.ipv4.ip_forward=1 >/dev/null 2>&1
+	fi
+	if grep -q '"inet6_address"' "$CONF" 2>/dev/null; then
+		_ob_v6="$(cat /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null)"
+		if [ "$_ob_v6" = "0" ]; then
+			mkdir -p "$DATA"
+			printf 'ipv6=0\n' >> "$FORWARD_STATE"
+			sysctl -q -w net.ipv6.conf.all.forwarding=1 >/dev/null 2>&1
+		fi
+	fi
+	return 0
+}
+
+openbox_restore_forward() {
+	[ -f "$FORWARD_STATE" ] || return 0
+	grep -q '^ipv4=0' "$FORWARD_STATE" && sysctl -q -w net.ipv4.ip_forward=0 >/dev/null 2>&1
+	grep -q '^ipv6=0' "$FORWARD_STATE" && sysctl -q -w net.ipv6.conf.all.forwarding=0 >/dev/null 2>&1
+	rm -f "$FORWARD_STATE"
+	return 0
+}
+
+pre_start() {
+	if [ ! -x "$BIN" ]; then
+		echo "openbox: sing-box binary not found at $BIN" >&2
+		return 1
+	fi
+	if [ ! -f "$CONF" ]; then
+		echo "openbox: config not found at $CONF" >&2
+		return 1
+	fi
+	[ -e /dev/net/tun ] || modprobe tun >/dev/null 2>&1
+	openbox_clean_stale_nft
+	openbox_load_modules
+	openbox_apply_nft
+	openbox_apply_mark_rule
+	openbox_enable_forward
+	return 0
+}
+
+post_stop() {
+	openbox_clear_mark_rule
+	command -v nft >/dev/null 2>&1 && nft delete table $NFT_TABLE >/dev/null 2>&1
+	openbox_restore_forward
+	return 0
+}
+
+# ── fnOS 进程管理（替代 systemd） ─────────────────────────────────────────
+kernel_pid() {
+	[ -f "$PIDFILE" ] || return 1
+	_kp=$(tr -dc '0-9' < "$PIDFILE" 2>/dev/null)
+	[ -n "$_kp" ] || return 1
+	kill -0 "$_kp" 2>/dev/null || return 1
+	printf '%s\n' "$_kp"
+}
+
+start_kernel() {
+	if kernel_pid >/dev/null; then
+		echo "running"
+		return 0
+	fi
+	pre_start || return 1
+	# setsid + 重定向 + &：内核必须活过发起它的 shell（面板通过 spawn 调本脚本），
+	# 并不受终端挂断影响。非交互 sh 下 setsid 直接 exec，$! 就是 sing-box 的 PID；
+	# 若某些环境下 setsid 先 fork，回退按进程名找回（NAS 上只有本应用的内核）。
+	setsid "$BIN" run -c "$CONF" -D "$DATA" >> "$KERNEL_LOG" 2>&1 &
+	_kpid=$!
+	sleep 1
+	if ! kill -0 "$_kpid" 2>/dev/null || ! grep -q 'sing-box' "/proc/$_kpid/comm" 2>/dev/null; then
+		_kpid=$(pgrep -x sing-box 2>/dev/null | head -n 1)
+	fi
+	if [ -z "$_kpid" ] || ! kill -0 "$_kpid" 2>/dev/null; then
+		echo "openbox: kernel exited immediately, last log lines:" >&2
+		tail -n 5 "$KERNEL_LOG" 2>/dev/null >&2
+		post_stop
+		return 1
+	fi
+	printf '%s\n' "$_kpid" > "$PIDFILE"
+	echo "running"
+	return 0
+}
+
+stop_kernel() {
+	_kpid=$(kernel_pid) || { rm -f "$PIDFILE"; post_stop; echo "inactive"; return 0; }
+	kill -TERM "$_kpid" 2>/dev/null
+	_ob_i=0
+	while [ "$_ob_i" -lt 15 ] && kill -0 "$_kpid" 2>/dev/null; do
+		sleep 1
+		_ob_i=$((_ob_i + 1))
+	done
+	# 到点强杀（上游 systemd 的 TimeoutStopSec=15 + KillMode=mixed）
+	kill -0 "$_kpid" 2>/dev/null && kill -KILL "$_kpid" 2>/dev/null
+	rm -f "$PIDFILE"
+	post_stop
+	echo "inactive"
+	return 0
+}
+
+case "$1" in
+	pre-start) pre_start ;;
+	post-stop) post_stop ;;
+	start)   start_kernel ;;
+	stop)    stop_kernel ;;
+	restart) stop_kernel >/dev/null 2>&1; start_kernel ;;
+	enable)    : > "$AUTOSTART" 2>/dev/null; exit 0 ;;
+	disable)   rm -f "$AUTOSTART" 2>/dev/null; exit 0 ;;
+	enabled)   [ -f "$AUTOSTART" ] && exit 0 || exit 1 ;;
+	running|status)
+		if kernel_pid >/dev/null; then
+			echo "running"
+			exit 0
+		fi
+		echo "inactive"
+		exit 3
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart|enable|disable|enabled|running|status|pre-start|post-stop}" >&2
+		exit 1
+		;;
+esac

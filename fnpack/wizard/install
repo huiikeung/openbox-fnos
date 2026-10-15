@@ -1,0 +1,29 @@
+[
+    {
+        "stepTitle": "欢迎安装 Open-Box",
+        "items": [
+            {
+                "type": "tips",
+                "helpText": "Open-Box 是一体化透明代理方案：sing-box 内核 + Web 管理面板。安装完成后从应用中心打开面板（默认 http://<NAS IP>:3036），首次访问设置管理密码，订阅、节点、分流、DNS、TUN 等全部在面板内完成。需要 TUN / nftables 权限，应用以 root 运行。"
+            }
+        ]
+    },
+    {
+        "stepTitle": "面板端口",
+        "items": [
+            {
+                "type": "text",
+                "field": "panel_port",
+                "label": "面板端口 (Panel Port)",
+                "initValue": "3036",
+                "placeholder": "默认 3036，留空使用默认值",
+                "rules": [
+                    {
+                        "pattern": "^$|^(1[0-9]{4}|[1-9][0-9]{0,3}|[1-5][0-9]{0,4})$",
+                        "message": "请输入 1024-65535 之间的数字或留空"
+                    }
+                ]
+            }
+        ]
+    }
+]

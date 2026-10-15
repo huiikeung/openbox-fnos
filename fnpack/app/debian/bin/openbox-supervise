@@ -1,0 +1,147 @@
+#!/bin/sh
+# openbox-supervise —— fnOS 服务监管器（SERVICE_COMMAND，单行、不带 &）
+#
+# fnOS 的 start_daemon 会 background 本脚本并把 $! 写进 PID 文件，stop 时
+# SIGTERM 本脚本。职责：
+#   1. 常驻面板（openbox-panel-run），死了 3 秒后重新拉起（对齐上游
+#      systemd 的 Restart=always / RestartSec=3）；连续秒退 5 次则放弃；
+#   2. data/core-autostart 存在时先拉起内核（对齐上游 openbox.service 的
+#      systemctl enable 语义：部署成功开、停止内核时关）；
+#   3. 常驻 Cloudflare 隧道助手（openbox-cf-tunnel.mjs，本地 API 供面板注入的
+#      「Cloudflare 隧道」卡片起停 quick tunnel；隧道只覆盖面板/订阅分享的 HTTP）；
+#   3b. 常驻面板前置代理（openbox-front.mjs）：守对外端口(panel-port)，/api/fnoscf/*
+#       分流给隧道助手、其余转给内层面板(:3037)——v0.1.326 起面板服务端是完整性
+#       清单保护的 bundle 不能打补丁，而 fnOS 应用中心/FN Connect 的 /api/* 请求
+#       直达面板端口不过网关，隧道卡片的同源 API 必须在面板端口侧有入口；
+#   4. SIGTERM/SIGINT：停面板 → 停内核（openbox-ctl stop 内含 nft 表 /
+#      策略路由 / IP 转发的清理）→ 退出。
+#
+# 面板端口改端口后由 openbox-panel-ctl restart 杀面板，本循环重拉时自然生效。
+
+ROOT="${OPENBOX_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
+export OPENBOX_ROOT="$ROOT"
+export OPENBOX_PLATFORM=systemd
+DATA="$ROOT/data"
+CTL="$ROOT/debian/bin/openbox-ctl"
+PANEL_RUN="$ROOT/debian/bin/openbox-panel-run"
+GATEWAY_RUN="$ROOT/debian/bin/openbox-gateway"
+LOG="$DATA/supervise.log"
+
+mkdir -p "$DATA" 2>/dev/null || true
+
+log() {
+	echo "$(date '+%Y-%m-%d %H:%M:%S') [supervise] $*" >> "$LOG" 2>/dev/null || true
+}
+
+PANEL_PID=""
+GATEWAY_SUP_PID=""
+CF_TUNNEL_SUP_PID=""
+FRONT_SUP_PID=""
+SHUTTING_DOWN=0
+
+shutdown() {
+	[ "$SHUTTING_DOWN" = "1" ] && return
+	SHUTTING_DOWN=1
+	trap '' TERM INT
+	log "shutdown: stopping panel, gateway, front proxy and kernel"
+	# Cloudflare 隧道助手：先杀自重启子壳，再按进程名兜底杀 node helper
+	if [ -n "$CF_TUNNEL_SUP_PID" ]; then
+		kill "$CF_TUNNEL_SUP_PID" 2>/dev/null
+	fi
+	pkill -f openbox-cf-tunnel.mjs 2>/dev/null
+	# 面板前置代理：先杀自重启子壳，再按进程名兜底杀
+	if [ -n "$FRONT_SUP_PID" ]; then
+		kill "$FRONT_SUP_PID" 2>/dev/null
+	fi
+	pkill -f openbox-front.mjs 2>/dev/null
+	if [ -n "$PANEL_PID" ]; then
+		kill -TERM "$PANEL_PID" 2>/dev/null
+		_i=0
+		while [ "$_i" -lt 5 ] && kill -0 "$PANEL_PID" 2>/dev/null; do
+			sleep 1
+			_i=$((_i + 1))
+		done
+		kill -0 "$PANEL_PID" 2>/dev/null && kill -KILL "$PANEL_PID" 2>/dev/null
+	fi
+	# 网关：先杀自重启子壳，再按 pidfile 杀 node 本体
+	[ -n "$GATEWAY_SUP_PID" ] && kill "$GATEWAY_SUP_PID" 2>/dev/null
+	if [ -f "$DATA/gateway.pid" ]; then
+		kill "$(cat "$DATA/gateway.pid")" 2>/dev/null
+		rm -f "$DATA/gateway.pid" 2>/dev/null
+	fi
+	"$CTL" stop >> "$LOG" 2>&1 || true
+	rm -f "$DATA/supervise.pid" "$DATA/panel.pid" 2>/dev/null || true
+	log "shutdown: done"
+	exit 0
+}
+
+trap shutdown TERM INT
+
+printf '%s\n' "$$" > "$DATA/supervise.pid"
+log "supervisor started (pid $$, root $ROOT)"
+
+# fnOS 同源网关（应用中心 iframe 走它）：子壳自重启，pidfile 由网关自己写
+( while :; do
+    "$GATEWAY_RUN" >> "$LOG" 2>&1
+    sleep 3
+  done ) &
+GATEWAY_SUP_PID=$!
+log "gateway supervisor started (pid $GATEWAY_SUP_PID)"
+
+# Cloudflare 隧道助手：和面板同生命周期；隧道是否开着由面板里的卡片决定
+( while :; do
+    "$ROOT/node/bin/node" "$ROOT/debian/bin/openbox-cf-tunnel.mjs" >> "$LOG" 2>&1
+    sleep 3
+  done ) &
+CF_TUNNEL_SUP_PID=$!
+log "cf-tunnel helper supervisor started (pid $CF_TUNNEL_SUP_PID)"
+
+# 面板前置代理：守对外端口(panel-port)，/api/fnoscf 分流给助手、其余转内层面板(:3037)
+( while :; do
+    "$ROOT/node/bin/node" "$ROOT/debian/bin/openbox-front.mjs" >> "$LOG" 2>&1
+    sleep 3
+  done ) &
+FRONT_SUP_PID=$!
+log "front proxy supervisor started (pid $FRONT_SUP_PID)"
+
+# 开机自启的内核（上游 enable 语义）
+if [ -f "$DATA/core-autostart" ]; then
+	log "core autostart enabled — starting kernel"
+	"$CTL" start >> "$LOG" 2>&1 || log "core start failed"
+fi
+
+FAILS=0
+while :; do
+	START_TS=$(date +%s)
+	"$PANEL_RUN" >> "$LOG" 2>&1 &
+	PANEL_PID=$!
+	printf '%s\n' "$PANEL_PID" > "$DATA/panel.pid"
+	log "panel started (pid $PANEL_PID)"
+	wait "$PANEL_PID"
+	RC=$?
+	[ "$SHUTTING_DOWN" = "1" ] && exit 0
+	log "panel exited (rc=$RC)"
+	# 连续秒退（node 缺失 / 端口被占等）超过 5 次就放弃，避免无限重启刷日志
+	NOW=$(date +%s)
+	if [ $((NOW - START_TS)) -lt 2 ]; then
+		FAILS=$((FAILS + 1))
+	else
+		FAILS=0
+	fi
+	if [ "$FAILS" -ge 5 ]; then
+		log "panel failed $FAILS times in a row — giving up"
+		"$CTL" stop >> "$LOG" 2>&1 || true
+		[ -n "$GATEWAY_SUP_PID" ] && kill "$GATEWAY_SUP_PID" 2>/dev/null
+		if [ -f "$DATA/gateway.pid" ]; then
+			kill "$(cat "$DATA/gateway.pid")" 2>/dev/null
+			rm -f "$DATA/gateway.pid" 2>/dev/null
+		fi
+		[ -n "$CF_TUNNEL_SUP_PID" ] && kill "$CF_TUNNEL_SUP_PID" 2>/dev/null
+		pkill -f openbox-cf-tunnel.mjs 2>/dev/null
+		[ -n "$FRONT_SUP_PID" ] && kill "$FRONT_SUP_PID" 2>/dev/null
+		pkill -f openbox-front.mjs 2>/dev/null
+		rm -f "$DATA/supervise.pid" "$DATA/panel.pid" 2>/dev/null || true
+		exit 1
+	fi
+	sleep 3
+done

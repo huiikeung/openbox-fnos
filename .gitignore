@@ -1,0 +1,9 @@
+# 构建产物与下载的第三方资产（Open-Box 发布包 / Node 运行时）不入库
+# 安装包（fpk）通过 GitHub Release 分发，不入代码库
+dist/
+resources/
+downloads/
+*.fpk
+*.tgz
+*.tar.gz
+.DS_Store

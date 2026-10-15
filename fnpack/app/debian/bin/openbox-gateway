@@ -1,0 +1,16 @@
+#!/bin/sh
+# openbox-gateway —— fnOS 同源网关启动器
+#
+# fnOS 应用中心以 iframe 打开应用：有 gatewaySocket 的应用走同源网关
+# （https://<nas>/app/<appname>/ → 本 socket），否则直接嵌 http://<ip>:<port>
+# （HTTPS 的 fnOS 页面里会被浏览器当混合内容拦截 → 白屏）。
+# 本脚本 exec Node 跑 openbox-gateway.mjs；由 openbox-supervise 拉起到后台。
+
+ROOT="${OPENBOX_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
+export OPENBOX_ROOT="$ROOT"
+NODE="$ROOT/node/bin/node"
+if [ ! -x "$NODE" ]; then
+	echo "openbox-gateway: node runtime not found at $NODE" >&2
+	exit 1
+fi
+exec "$NODE" "$ROOT/debian/bin/openbox-gateway.mjs"

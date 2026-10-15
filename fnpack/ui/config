@@ -1,0 +1,15 @@
+{
+    ".url": {
+        "fnnas.openbox.Application": {
+            "title": "Open-Box",
+            "icon": "images/icon_{0}.png",
+            "type": "iframe",
+            "protocol": "http",
+            "port": "3036",
+            "url": "/",
+            "allUsers": true,
+            "gatewaySocket": "openbox.sock",
+            "gatewayPrefix": "/app/fnnas.openbox"
+        }
+    }
+}

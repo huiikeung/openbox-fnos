@@ -1,0 +1,15 @@
+#!/bin/bash
+# Config callback — runs after user changes environment variables
+COMMON=$(dirname $0)"/common"
+if [ -r "${COMMON}" ]; then . "${COMMON}"; fi
+SVC_SETUP=$(dirname $0)"/service-setup"
+if [ -r "${SVC_SETUP}" ]; then . "${SVC_SETUP}"; fi
+
+# Restart the app so the panel picks up any environment changes.
+if daemon_status; then
+    stop_daemon
+    sleep 1
+    start_daemon
+fi
+
+config_callback

@@ -1,0 +1,10 @@
+[openbox]
+3036/tcp=Auto
+9095/tcp=Auto
+7853/tcp=Auto
+7853/udp=Auto
+7854/udp=Auto
+7891/tcp=Auto
+7891/udp=Auto
+53/tcp=Auto
+53/udp=Auto
