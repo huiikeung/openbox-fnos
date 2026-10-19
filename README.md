@@ -13,7 +13,7 @@
 
 把上游面向 OpenWrt / Debian 的 Open-Box 路由器端打包成 fnOS 原生应用：
 
-- **sing-box 魔改内核**（`1.14.1-openbox-tcp23`，随包，按架构 x64 / arm64）
+- **sing-box 魔改内核**（`1.14.1-openbox-tcp28`，随包，按架构 x64 / arm64）
 - **Node 24 运行时**（glibc 官方构建，随包）
 - **完整 GeoSite / GeoIP 数据**（随包，首次启动即用）
 - **Web 管理面板**（默认端口 `3036`，首次访问设置管理密码）
@@ -34,7 +34,7 @@ IP 转发等系统层动作，与上游 Debian 版逐函数一致）；面板由
 ### 方式二：命令行（本机验证过）
 
 ```bash
-appcenter-cli install-fpk /path/to/fnnas.openbox-0.1.321-x64.fpk
+appcenter-cli install-fpk /path/to/fnnas.openbox-0.1.324-x64.fpk
 appcenter-cli start fnnas.openbox
 appcenter-cli status fnnas.openbox
 ```
@@ -52,7 +52,7 @@ appcenter-cli status fnnas.openbox
 
 # 指定版本 / 只构建一个架构 / 换上游版本
 ./scripts/build_fpk.sh 0.1.303 x64
-OPENBOX_TAG=v0.1.331 ./scripts/build_fpk.sh 0.1.321
+OPENBOX_TAG=v0.1.341 ./scripts/build_fpk.sh 0.1.324
 ```
 
 构建流程：下载上游发布包（SHA256 校验）→ 用 nodejs.org 官方 glibc Node 替换包内 musl 版
@@ -203,6 +203,21 @@ cat   /vol1/@appdata/fnnas.openbox/openbox.log            # fnOS 安装/服务�
 
 ## ✅ 真机验证记录（fnOS x86_64 / Debian 12）
 
+- [x] 升级至上游 v0.1.341（fpk 0.1.323→0.1.324，`OPENBOX_TAG=v0.1.341`）：uninstall 保留数据 +
+      重装后数据原样保留（app_storage 107 行、订阅/节点/组/规则/面板密码/端口原样保留，旧密码可直接
+      登录）；meta.json=v0.1.341、sing-box 1.14.1-openbox-tcp28（tcp25→tcp28，与发布说明一致，装机后
+      `sing-box version` 实测确认）、Node 24.18.0、Geo 2026-10-19（1919 份 GeoSite、260 份 GeoIP）。
+      上游变更（v0.1.335–v0.1.341）：故障转移统一为组右上角测速入口、修复超时/拒连后仍显示旧成功延迟、
+      内存显示改用 RSS、修复 WireGuard/TCP 空闲连接缓冲内存占用、移动 PWA 卡片统一 16px、修复 IPv6
+      优先解析无出口时的订阅/规则下载超时、修复 OpenWrt ip-full 模拟 LAN 终端与手机端冲突提示两列、
+      修复「直连不进内核」终端分流一台设备走代理导致其它设备直连域名也全部进内核；v0.1.341 新增直连
+      IP 段（站点集/前置自定义分流 ipCidr、直连 geoip 集合）入口旁路。实测：面板 API 触发完整部署
+      （`POST /api/openbox/deploy`）ok:true 12.6s（规则集 0.5 · 校验 0.2 · DNS 接管 0.2 · 重启 2.2 ·
+      确认在跑 3.0）；入口旁路元数据确认 geoip-cn 10208 段走 nft 入口旁路（auto_redirect，entry-bypass.nft
+      重生成）；内核凭 core-autostart 恢复后 Clash API 9095/DNS 7853/7854/入站 7891/TUN 全部就绪；
+      SS 局域网代理（sing-box 客户端实测 16663）https 204、http 200；面板 3036 200、经前置代理正常。
+      注意：agent 沙箱为 PID namespace，`openbox-ctl status/running` 对宿主内核误报 inactive，以上内核
+      状态以部署流程「确认在跑」+ 端口/TUN/nft 证据为准
 - [x] `appcenter-cli install-fpk` 安装 → postinst 建好 data/etc/geodata symlink 与 panel-port
 - [x] 应用 start → 面板 `http://<NAS>:3036` HTTP 200，首次访问进入密码设置流程
 - [x] `openbox-panel-ctl status` → running；`openbox-ctl status` → inactive(rc=3)
@@ -234,6 +249,13 @@ cat   /vol1/@appdata/fnnas.openbox/openbox.log            # fnOS 安装/服务�
       全圆角 pill、项间 0 间距紧贴；注入 `.sidebar .menu>li+li{margin-top:.5rem}` 后无头
       Chromium 实测项间距 8px（折叠态同样生效，页面内其他 .menu 不受影响）；装机后 index.html
       含注入样式、面板 3036 HTTP 200、内核经 core-autostart 恢复、数据原样保留
+- [x] 升级至上游 v0.1.334（fpk v0.1.321→v0.1.322，`OPENBOX_TAG=v0.1.334`）：uninstall 保留数据 +
+      重装后数据原样保留；meta.json=v0.1.334、sing-box 1.14.1-openbox-tcp25（与 v0.1.331 持平，
+      发布说明未提内核变动，实测确认）、Node 24.18.0、Geo 2026-10-15。修复内容：OpenWrt 停止再
+      启动/开机自启可能遗漏 TUN 放行规则导致无法联网（#636）、TLS 节点明确指定证书校验仍被跳过
+      （#626）、配置 0600 原子写入。实测：新版部署流程 ok:true 12.3s；SS 局域网 204；ctl running
+      正常；前置代理/网关双路 fnoscf 通；面板经前置代理 200；隧道经新链路启动约 3 分钟边缘注册
+      完成，经隧道访问面板 200
 - [x] 升级至上游 v0.1.331（fpk v0.1.320→v0.1.321，`OPENBOX_TAG=v0.1.331`，未指定 tag 时经
       releases/latest 查到最新版）：uninstall 保留数据 + 重装后数据原样保留；meta.json=v0.1.331、
       **sing-box 1.14.1-openbox-tcp25（tcp23→tcp25 内核升级，与发布说明一致）**、Node 24.18.0、

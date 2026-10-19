@@ -349,6 +349,9 @@ PYEOF
     #     补 0.5rem（与面板其他卡片/分区的 gap-2、--app-space 一致）使其分离；
     #     折叠态（w-13 纯图标）同样生效。作用域限定 .sidebar 内，不动页面里的
     #     其他 .menu（如设置页横向 settings-menu）。
+    #     另注入第三段脚本（platform-tiles hide）：「后端设置」页的 router-platform-tiles
+    #     平台磁贴里，只保留带「本机」标识的当前平台（fnOS/Debian），OpenWrt、Docker 等
+    #     未检测到的磁贴隐藏。
     #     另注入第二段脚本（MARK2 = fnos-openbox: cf-tunnel ui）：在「设置 → 后端
     #     设置」页「导出与导入」模块上方插一张 Cloudflare 隧道卡片（起/停 quick tunnel、显示并复制
     #     trycloudflare.com 地址），数据来自本机助手 openbox-cf-tunnel.mjs（debian/bin，
@@ -625,6 +628,30 @@ CF_UI = '''<script>
 })();
 </script>'''
 
+PLATFORM_HIDE = '''<script>
+/* fnos-openbox: platform-tiles hide — 隐藏「后端设置」里未检测到的平台磁贴 */
+/* fnOS（Debian/systemd）上 OpenWrt、Docker 磁贴不适用：只保留带「本机」标识的
+   当前平台磁贴，其余隐藏；MutationObserver 覆盖异步渲染/标签切换。 */
+(function(){
+  function hideForeign(){
+    var conts = document.querySelectorAll('.router-platform-tiles');
+    for (var i = 0; i < conts.length; i++) {
+      var tiles = conts[i].children;
+      for (var j = 0; j < tiles.length; j++) {
+        var t = (tiles[j].textContent || '');
+        if (t.indexOf('\u672c\u673a') === -1 && t.trim()) {
+          tiles[j].style.display = 'none';
+        }
+      }
+    }
+  }
+  hideForeign();
+  if (window.MutationObserver) {
+    new MutationObserver(hideForeign).observe(document.documentElement, {childList: true, subtree: true});
+  }
+})();
+</script>'''
+
 MARK1 = 'fnos-openbox: promo-banner remover'
 MARK2 = 'fnos-openbox: cf-tunnel ui'
 injected = []
@@ -656,6 +683,8 @@ if MARK1 not in html:
  </script>''')
 if MARK2 not in html:
      injected.append(CF_UI)
+if 'fnos-openbox: platform-tiles hide' not in html:
+     injected.append(PLATFORM_HIDE)
  # 对齐：daisyUI 菜单项有 12px(0.75rem) 内边距，菜单图标因此比 sidebar 左缘
  # 缩进 12px；给侧栏 logo 加同样左边距，使其与下方菜单图标左边缘对齐
  # （img.app-logo 只有 SidebarHeader 在用；侧栏折叠时 logo 不渲染，无副作用）。
@@ -666,7 +695,7 @@ if '</head>' not in html:
 if injected or 'img.app-logo{margin-left:.75rem}' not in html:
      html = html.replace('</head>', ''.join(injected) + style + '</head>', 1)
      p.write_text(html, encoding='utf-8')
-     print('    ✓ index.html 已注入去推广脚本 + logo 对齐样式 + 侧栏菜单间距 + Cloudflare 隧道 UI')
+     print('    ✓ index.html 已注入去推广脚本 + logo 对齐样式 + 侧栏菜单间距 + Cloudflare 隧道 UI + 平台磁贴隐藏')
 else:
      print('    ✓ index.html 已包含全部注入（跳过）')
 PYEOF
