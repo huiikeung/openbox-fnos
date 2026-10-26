@@ -10,3 +10,6 @@ downloads/
 
 # 部署用 SSH 密钥（仅本机留存，严禁入库）
 .git-ssh/
+
+# DSH harness 操作暂存目录（仅本机留存，不入库）
+.dsh-ops/
