@@ -13,7 +13,7 @@
 
 把上游面向 OpenWrt / Debian 的 Open-Box 路由器端打包成 fnOS 原生应用：
 
-- **sing-box 魔改内核**（`1.14.1-openbox-tcp28`，随包，按架构 x64 / arm64）
+- **sing-box 魔改内核**（`1.14.1-openbox-tcp31`，随包，按架构 x64 / arm64）
 - **Node 24 运行时**（glibc 官方构建，随包）
 - **完整 GeoSite / GeoIP 数据**（随包，首次启动即用）
 - **Web 管理面板**（默认端口 `3036`，首次访问设置管理密码）
@@ -34,7 +34,7 @@ IP 转发等系统层动作，与上游 Debian 版逐函数一致）；面板由
 ### 方式二：命令行（本机验证过）
 
 ```bash
-appcenter-cli install-fpk /path/to/fnnas.openbox-0.1.324-x64.fpk
+appcenter-cli install-fpk /path/to/fnnas.openbox-0.1.325-x64.fpk
 appcenter-cli start fnnas.openbox
 appcenter-cli status fnnas.openbox
 ```
@@ -52,7 +52,7 @@ appcenter-cli status fnnas.openbox
 
 # 指定版本 / 只构建一个架构 / 换上游版本
 ./scripts/build_fpk.sh 0.1.303 x64
-OPENBOX_TAG=v0.1.341 ./scripts/build_fpk.sh 0.1.324
+OPENBOX_TAG=v0.1.364 ./scripts/build_fpk.sh 0.1.325
 ```
 
 构建流程：下载上游发布包（SHA256 校验）→ 用 nodejs.org 官方 glibc Node 替换包内 musl 版
@@ -203,6 +203,22 @@ cat   /vol1/@appdata/fnnas.openbox/openbox.log            # fnOS 安装/服务�
 
 ## ✅ 真机验证记录（fnOS x86_64 / Debian 12）
 
+- [x] 升级至上游 v0.1.364（fpk 0.1.324→0.1.325，`OPENBOX_TAG=v0.1.364`）：uninstall 保留数据 +
+      重装后数据原样保留（app_storage 107 行、订阅/节点/组/规则/面板密码/端口原样保留，旧密码可直接
+      登录）；meta.json=v0.1.364、**sing-box 1.14.1-openbox-tcp31（tcp28→tcp31，发布说明未提及内核
+      变动，装机后 `sing-box version` 实测确认）**、Node 24.18.0、Geo 2026-10-25。上游变更
+      （v0.1.341 之后 23 个版本，v0.1.342–v0.1.354 发布说明已被上游清理、据提交记录）：终端 IPv6
+      修复、FakeIP 独立升级下载、客户端配对码、升级下载修复；v0.1.355 起：修复节点分流同步后仍用
+      默认测速网站、编辑订阅保存旧入口问题、订阅「登录」页（Xboard/V2Board）、共享网络指定出口
+      （#615）、动态组订阅范围（#377）、前置自定义分流按出口页签管理、DNS 泛域名重写保留子域名
+      前缀、代理策略页卡顿优化（#721、#722）、TUIC/Hysteria2 证书指纹与 WireGuard 预共享密钥/MTU
+      修复、iOS VPN 路由查询修复、移动端底部导航悬浮胶囊等。实测：面板 API 触发完整部署
+      （`POST /api/openbox/deploy`）ok:true 11.1s；nativeBypass（geoip-cn/geoip-private 直连 IP
+      入口旁路）启用，入口模式 blacklist（分流兜底「其他-自动」走代理，未命中目标进内核，符合预期）；
+      SS 局域网代理（sing-box 客户端实测 16663）https 204、http 200；内核凭 core-autostart 恢复后
+      Clash API 9095/DNS 7853/7854/入站 7891/TUN/nft 表全部就绪；面板 3036 200、数据原样保留。
+      注意：agent 沙箱为 PID namespace，`openbox-ctl status/running` 对宿主内核误报 inactive，以上
+      内核状态以部署流程「确认在跑」+ 端口/TUN/nft 证据为准
 - [x] 升级至上游 v0.1.341（fpk 0.1.323→0.1.324，`OPENBOX_TAG=v0.1.341`）：uninstall 保留数据 +
       重装后数据原样保留（app_storage 107 行、订阅/节点/组/规则/面板密码/端口原样保留，旧密码可直接
       登录）；meta.json=v0.1.341、sing-box 1.14.1-openbox-tcp28（tcp25→tcp28，与发布说明一致，装机后
