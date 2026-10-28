@@ -34,7 +34,7 @@ IP 转发等系统层动作，与上游 Debian 版逐函数一致）；面板由
 ### 方式二：命令行（本机验证过）
 
 ```bash
-appcenter-cli install-fpk /path/to/fnnas.openbox-0.1.325-x64.fpk
+appcenter-cli install-fpk /path/to/fnnas.openbox-0.1.326-x64.fpk
 appcenter-cli start fnnas.openbox
 appcenter-cli status fnnas.openbox
 ```
@@ -52,7 +52,7 @@ appcenter-cli status fnnas.openbox
 
 # 指定版本 / 只构建一个架构 / 换上游版本
 ./scripts/build_fpk.sh 0.1.303 x64
-OPENBOX_TAG=v0.1.364 ./scripts/build_fpk.sh 0.1.325
+OPENBOX_TAG=v0.1.371 ./scripts/build_fpk.sh 0.1.326
 ```
 
 构建流程：下载上游发布包（SHA256 校验）→ 用 nodejs.org 官方 glibc Node 替换包内 musl 版
@@ -203,6 +203,20 @@ cat   /vol1/@appdata/fnnas.openbox/openbox.log            # fnOS 安装/服务�
 
 ## ✅ 真机验证记录（fnOS x86_64 / Debian 12）
 
+- [x] 升级至上游 v0.1.371（fpk 0.1.325→0.1.326，`OPENBOX_TAG=v0.1.371`）：uninstall 保留数据 +
+      重装后数据原样保留（app_storage 108 行、订阅/节点/组/规则/面板密码/端口原样保留，旧密码可直接
+      登录；较此前多 1 行为新版面板设置迁移）；meta.json=v0.1.371、sing-box 1.14.1-openbox-tcp31
+      （与 v0.1.364 持平未变，装机后 `sing-box version` 实测确认）、Node 24.18.0、Geo 2026-10-28。
+      上游变更（v0.1.364 之后 7 个版本）：连接/日志/运行规则合并为「连接」页签切换并记住页签；移动端
+      文字页签、连接状态移至右上角；修复订阅分享 Clash 格式 Trojan 等协议 SNI 丢失（#743）；修复手机端
+      面板设置（圆角等）后台重启后丢失并统一保存恢复全部设置（#611）；深色主题统一深蓝配色；代理组分列
+      拆分 PC（三列）/移动端（两列）独立设置；修复手机端设置页顶部被菜单遮挡；加强本机 DNS 上游防循环
+      保护（#736）、修复旧版 Lua LuCI 入口面板启动问题；测速区分解析失败/资源不足/普通超时减少误判；
+      客户端托盘图标黑白/彩色。实测：面板 API 触发完整部署（`POST /api/openbox/deploy`）ok:true 10.6s；
+      nativeBypass（geoip-cn/geoip-private 直连 IP 入口旁路）启用；SS 局域网代理（sing-box 客户端实测
+      16663）https 204、http 200；`openbox-ctl status`/`running` 均 running rc=0（本次会话沙箱策略为
+      danger-full-access、无 PID namespace 隔离，ctl 可直接验证宿主内核）；面板 3036 200、Clash API
+      9095/DNS/TUN/nft 表全部就绪、数据原样保留
 - [x] 升级至上游 v0.1.364（fpk 0.1.324→0.1.325，`OPENBOX_TAG=v0.1.364`）：uninstall 保留数据 +
       重装后数据原样保留（app_storage 107 行、订阅/节点/组/规则/面板密码/端口原样保留，旧密码可直接
       登录）；meta.json=v0.1.364、**sing-box 1.14.1-openbox-tcp31（tcp28→tcp31，发布说明未提及内核
