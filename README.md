@@ -13,7 +13,7 @@
 
 把上游面向 OpenWrt / Debian 的 Open-Box 路由器端打包成 fnOS 原生应用：
 
-- **sing-box 魔改内核**（`1.14.1-openbox-tcp31`，随包，按架构 x64 / arm64）
+- **sing-box 魔改内核**（`1.14.4-openbox-43`，随包，按架构 x64 / arm64；上游 v0.1.392 起内核基线升到 sing-box 1.14.4、命名方案由 `tcpNN` 改为纯序号，以随包实测为准）
 - **Node 24 运行时**（glibc 官方构建，随包）
 - **完整 GeoSite / GeoIP 数据**（随包，首次启动即用）
 - **Web 管理面板**（默认端口 `3036`，首次访问设置管理密码）
@@ -34,7 +34,7 @@ IP 转发等系统层动作，与上游 Debian 版逐函数一致）；面板由
 ### 方式二：命令行（本机验证过）
 
 ```bash
-appcenter-cli install-fpk /path/to/fnnas.openbox-0.1.326-x64.fpk
+appcenter-cli install-fpk /path/to/fnnas.openbox-0.1.327-x64.fpk
 appcenter-cli start fnnas.openbox
 appcenter-cli status fnnas.openbox
 ```
@@ -52,7 +52,7 @@ appcenter-cli status fnnas.openbox
 
 # 指定版本 / 只构建一个架构 / 换上游版本
 ./scripts/build_fpk.sh 0.1.303 x64
-OPENBOX_TAG=v0.1.371 ./scripts/build_fpk.sh 0.1.326
+OPENBOX_TAG=v0.1.392 ./scripts/build_fpk.sh 0.1.327
 ```
 
 构建流程：下载上游发布包（SHA256 校验）→ 用 nodejs.org 官方 glibc Node 替换包内 musl 版
@@ -203,6 +203,19 @@ cat   /vol1/@appdata/fnnas.openbox/openbox.log            # fnOS 安装/服务�
 
 ## ✅ 真机验证记录（fnOS x86_64 / Debian 12）
 
+- [x] 升级至上游 v0.1.392（fpk 0.1.326→0.1.327，`OPENBOX_TAG=v0.1.392`）：uninstall 保留数据 +
+      重装后数据原样保留（app_storage 111 行、订阅/节点/组/规则/面板密码/端口原样保留，旧密码可直接
+      登录；较此前多 3 行为新版带宽检测/节点质量配置）；meta.json=v0.1.392、**sing-box
+      1.14.4-openbox-43（内核基线 1.14.1→1.14.4 大版本升级，命名方案 tcpNN→纯序号，发布说明完全未提，
+      装机后 `sing-box version` 实测确认）**、Node 24.18.0、Geo 2026-11-03。上游变更
+      （v0.1.371 之后 21 个版本；v0.1.372–381 经 git 标签核对与 v0.1.371 同提交、为同源重发布）：
+      修复一批 DNS/订阅下载/网络监听/Docker 转发问题（#715、#658、#640、#714、#359、#478、#366、
+      #549、#605、#513、#649、#337、#731、#383、#613、#698、#639、#769 部分）；新增负载均衡分组
+      （按连接分配节点、已有连接保持原出口）、带宽择优（按组启用）与概览节点质量（可用率/延时/带宽/
+      风险，缓存 24h）；后台检测超时统一 5s、负载均衡默认间隔 120s；HY2/TUIC 带宽检测误报修复、
+      节点专用 DNS 支持 DoH/UDP/TCP。实测：面板 API 触发完整部署 ok:true 11.0s；nativeBypass
+      （geoip-cn/geoip-private）启用；SS 局域网代理（sing-box 客户端实测 16663）https 204、http 200；
+      `openbox-ctl status` running rc=0；面板 3036 200、Clash API/DNS/TUN/nft 表全部就绪
 - [x] 升级至上游 v0.1.371（fpk 0.1.325→0.1.326，`OPENBOX_TAG=v0.1.371`）：uninstall 保留数据 +
       重装后数据原样保留（app_storage 108 行、订阅/节点/组/规则/面板密码/端口原样保留，旧密码可直接
       登录；较此前多 1 行为新版面板设置迁移）；meta.json=v0.1.371、sing-box 1.14.1-openbox-tcp31
