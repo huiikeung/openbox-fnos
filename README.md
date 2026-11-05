@@ -34,7 +34,7 @@ IP 转发等系统层动作，与上游 Debian 版逐函数一致）；面板由
 ### 方式二：命令行（本机验证过）
 
 ```bash
-appcenter-cli install-fpk /path/to/fnnas.openbox-0.1.327-x64.fpk
+appcenter-cli install-fpk /path/to/fnnas.openbox-0.1.328-x64.fpk
 appcenter-cli start fnnas.openbox
 appcenter-cli status fnnas.openbox
 ```
@@ -52,7 +52,7 @@ appcenter-cli status fnnas.openbox
 
 # 指定版本 / 只构建一个架构 / 换上游版本
 ./scripts/build_fpk.sh 0.1.303 x64
-OPENBOX_TAG=v0.1.392 ./scripts/build_fpk.sh 0.1.327
+OPENBOX_TAG=v0.1.400 ./scripts/build_fpk.sh 0.1.328
 ```
 
 构建流程：下载上游发布包（SHA256 校验）→ 用 nodejs.org 官方 glibc Node 替换包内 musl 版
@@ -203,6 +203,21 @@ cat   /vol1/@appdata/fnnas.openbox/openbox.log            # fnOS 安装/服务�
 
 ## ✅ 真机验证记录（fnOS x86_64 / Debian 12）
 
+- [x] 升级至上游 v0.1.400（fpk 0.1.327→0.1.328，`OPENBOX_TAG=v0.1.400`）：uninstall 保留数据 +
+      重装后数据原样保留（app_storage 115 行、订阅/节点/组/规则/面板密码/端口原样保留，旧密码可直接
+      登录；较此前多 4 行为新版节点质量/带宽检测配置）；meta.json=v0.1.400、sing-box
+      1.14.4-openbox-43（与 v0.1.392 持平未变，装机 `sing-box version` 实测确认）、Node 24.18.0、
+      Geo 2026-11-04。上游变更（v0.1.393–v0.1.400，发布说明完整）：修复内核/面板重启及无关配置变化
+      后带宽检测历史无法复用、关闭定期检测后保留有效结果；节点详情新增延时/带宽重测及信息刷新操作，
+      节点信息与风险评估永久保留成功结果优先读缓存；统一面板卡片/弹窗/侧栏/导航/页签/工具栏 12px
+      间距，对齐概览与代理页顶栏高度，修复窄屏连接工具栏溢出；统一浅色主题按钮/胶囊/顶栏配色，优化
+      概览布局与首次渲染；直连 DNS、代理 DNS 新增 DoH，支持选择上游或手动指定 UDP/TCP 解析器；
+      优化登录模式 API 自动识别（手动/定期刷新重新获取 API 与订阅链接、跟进站点接口配置），密码输入框
+      增加显示/隐藏按钮，更新新订阅特征与过滤关键词默认值；统一延时数字/圆点/图表配色（橙黄色系）；
+      v0.1.400 修复部分机场登录识别及订阅刷新兼容性、修复故障节点较多时已到期正常节点长期无法执行
+      带宽定期检测。实测：面板 API 触发完整部署 ok:true 11.0s；SS 局域网代理（sing-box 客户端实测
+      16663）https 204、http 200；`openbox-ctl status` running rc=0；面板 3036 200、TUN/nft 表/
+      9 端口全部就绪
 - [x] 升级至上游 v0.1.392（fpk 0.1.326→0.1.327，`OPENBOX_TAG=v0.1.392`）：uninstall 保留数据 +
       重装后数据原样保留（app_storage 111 行、订阅/节点/组/规则/面板密码/端口原样保留，旧密码可直接
       登录；较此前多 3 行为新版带宽检测/节点质量配置）；meta.json=v0.1.392、**sing-box
