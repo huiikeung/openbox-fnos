@@ -34,7 +34,7 @@ IP 转发等系统层动作，与上游 Debian 版逐函数一致）；面板由
 ### 方式二：命令行（本机验证过）
 
 ```bash
-appcenter-cli install-fpk /path/to/fnnas.openbox-0.1.328-x64.fpk
+appcenter-cli install-fpk /path/to/fnnas.openbox-0.1.329-x64.fpk
 appcenter-cli start fnnas.openbox
 appcenter-cli status fnnas.openbox
 ```
@@ -52,7 +52,7 @@ appcenter-cli status fnnas.openbox
 
 # 指定版本 / 只构建一个架构 / 换上游版本
 ./scripts/build_fpk.sh 0.1.303 x64
-OPENBOX_TAG=v0.1.400 ./scripts/build_fpk.sh 0.1.328
+OPENBOX_TAG=v0.1.422 ./scripts/build_fpk.sh 0.1.329
 ```
 
 构建流程：下载上游发布包（SHA256 校验）→ 用 nodejs.org 官方 glibc Node 替换包内 musl 版
@@ -203,6 +203,22 @@ cat   /vol1/@appdata/fnnas.openbox/openbox.log            # fnOS 安装/服务�
 
 ## ✅ 真机验证记录（fnOS x86_64 / Debian 12）
 
+- [x] 升级至上游 v0.1.422（fpk 0.1.328→0.1.329，`OPENBOX_TAG=v0.1.422`）+ **修复内核停机故障**：
+      uninstall 保留数据 + 重装后数据原样保留（app_storage 115 行，旧密码可直接登录）；meta.json=v0.1.422、
+      sing-box **1.14.4-openbox-45**（openbox-43→45，装机实测确认）、Node 24.18.0、Geo 2026-11-08。
+      **故障与修复**：11-06 起（fnOS 系统内核更新至 6.18.18.c1186-trim 后）内核启动即退——auto_redirect
+      的 nftables 初始化 FATAL（`flush nftables: conn.Receive: netlink receive: no such file or directory` +
+      `nfqueue register: invalid argument`），面板部署失败并移除 core-autostart；升级内核 openbox-43→45、
+      手动 `modprobe nfnetlink_queue` 均不能解决（新内核 6.18 的 nftables 行为与 sing-box auto-redirect
+      不兼容）。修复：面板 API PUT `/api/openbox/profile` 将 `tun.autoRedirect` 置 false（纯 tun 兼容
+      模式），部署 ok:true 9.5s，内核恢复 running、TUN up、全端口就绪、SS 局域网代理 https 204/http 200/
+      ip.sb 200（compat 模式下直连应答放行关闭、入口直连 IP 旁路改走系统路由表，属上游文档预期行为）。
+      上游变更（v0.1.401–412 经 git 标签核对为同源重发布，源码无变化；代码变更自 v0.1.413 起）：修复节点
+      较多时面板因节点质量初始化启动超时（#827、#809）、隐藏不可用节点误隐藏可用代理组（#823、#835、
+      #838）、负载均衡无当前出口时代理 DNS 误走直连（#840）、时钟回拨覆盖测速结果（#766）；连接页按
+      终端/目标汇总、组内分组、终端重命名、目标分流、JSON 视图、展开固定一级顺序；节点信息新增
+      「直连／中转」标签与入出口 IPv4 国旗地区；**DNS 上游支持 DoT**（直连/代理/备用，#793，订阅节点
+      域名解析同样支持）；带宽择优与节点质量评分综合延时/带宽/抖动、移除负载均衡 64 节点上限
 - [x] 升级至上游 v0.1.400（fpk 0.1.327→0.1.328，`OPENBOX_TAG=v0.1.400`）：uninstall 保留数据 +
       重装后数据原样保留（app_storage 115 行、订阅/节点/组/规则/面板密码/端口原样保留，旧密码可直接
       登录；较此前多 4 行为新版节点质量/带宽检测配置）；meta.json=v0.1.400、sing-box
