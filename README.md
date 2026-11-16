@@ -34,7 +34,7 @@ IP 转发等系统层动作，与上游 Debian 版逐函数一致）；面板由
 ### 方式二：命令行（本机验证过）
 
 ```bash
-appcenter-cli install-fpk /path/to/fnnas.openbox-0.1.329-x64.fpk
+appcenter-cli install-fpk /path/to/fnnas.openbox-0.1.330-x64.fpk
 appcenter-cli start fnnas.openbox
 appcenter-cli status fnnas.openbox
 ```
@@ -52,7 +52,7 @@ appcenter-cli status fnnas.openbox
 
 # 指定版本 / 只构建一个架构 / 换上游版本
 ./scripts/build_fpk.sh 0.1.303 x64
-OPENBOX_TAG=v0.1.422 ./scripts/build_fpk.sh 0.1.329
+OPENBOX_TAG=v0.1.445 ./scripts/build_fpk.sh 0.1.330
 ```
 
 构建流程：下载上游发布包（SHA256 校验）→ 用 nodejs.org 官方 glibc Node 替换包内 musl 版
@@ -203,6 +203,21 @@ cat   /vol1/@appdata/fnnas.openbox/openbox.log            # fnOS 安装/服务�
 
 ## ✅ 真机验证记录（fnOS x86_64 / Debian 12）
 
+- [x] 升级至上游 v0.1.445（fpk 0.1.329→0.1.330，`OPENBOX_TAG=v0.1.445`，**双内核时代首个版本**）：
+      uninstall 保留数据 + 重装后数据原样保留（app_storage 115 行，旧密码可直接登录）；meta.json=v0.1.445
+      （新增 mihomoVersion 字段）、**sing-box 1.14.4-openbox-55（45→55）+ Mihomo v1.19.34-openbox.10
+      双内核随包**（装机各自 `sing-box version`/`mihomo -v` 实测确认）、Node 24.18.0、Geo 2026-11-15。
+      上游 v0.1.423–445 期间源码几乎无变化（git 标签核对：423–431 与 413 同提交、436→445 零提交，
+      均为同源重发布）——变更几乎全部在发布资产：双内核（面板可切换 Sing-Box / Mihomo，热切换出站
+      无需重启内核）+ sing-box 内核资产持续迭代至 openbox-55；面板功能：连接/日志表格细横线与分组
+      展开、日志分组标题就地重命名/改目标分流、切换内核弹窗逐项检查、侧栏资源卡显示当前内核、
+      修复 Clash 订阅 VMess HTTP 节点丢 Host/请求方法（#快蹦测速失败）、修复关闭 IPv6 时 Mihomo
+      直连/代理切换失败致 TUN 不可用、流式转发降低内存峰值、前端资源预压缩 .gz（v0.1.442）。
+      **构建脚本适配**：前端大 chunk 变为 .js.gz 预压缩（服务端按 Accept-Encoding 提供、无 hash 校验），
+      API 路径相对化补丁改为 gunzip→替换→重压缩，语法校验覆盖 js.gz；payload 检查加 bin/mihomo。
+      **auto_redirect 复测**：内核 openbox-55 在 fnOS 6.18.18 上仍不兼容 nftables（FATAL 与 openbox-45
+      相同），已退回纯 tun 兼容模式。实测：面板 API 完整部署 ok:true（compat）；SS 局域网代理
+      https 204 / http 200；`openbox-ctl status` running、TUN up、autostart 在位；数据原样保留
 - [x] 升级至上游 v0.1.422（fpk 0.1.328→0.1.329，`OPENBOX_TAG=v0.1.422`）+ **修复内核停机故障**：
       uninstall 保留数据 + 重装后数据原样保留（app_storage 115 行，旧密码可直接登录）；meta.json=v0.1.422、
       sing-box **1.14.4-openbox-45**（openbox-43→45，装机实测确认）、Node 24.18.0、Geo 2026-11-08。

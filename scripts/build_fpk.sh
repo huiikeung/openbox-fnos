@@ -744,8 +744,11 @@ PYEOF
     #   路由是扁平的（/、/login、/setup + catchAll，无多级路径），相对解析安全；
     #   axios 的 baseURL（/api/controller）与 /rules/ 等调用路径会正确拼接。
     #   正则字面量里的转义形式 \/api\/ 一并处理（settings-saved 事件匹配用）。
+    #   v0.1.442 起上游把前端大 chunk 预压缩为 .js.gz（服务端按 Accept-Encoding
+    #   提供、无 hash 校验）：.js.gz 需 gunzip → 替换 → 重新 gzip；未压缩 .js
+    #   仍直接替换。
     python3 - "$app/panel/dist/assets" <<'PYEOF'
-import sys, pathlib
+import sys, pathlib, gzip
 assets = pathlib.Path(sys.argv[1])
 n = 0
 for f in sorted(assets.glob('*.js')):
@@ -755,10 +758,16 @@ for f in sorted(assets.glob('*.js')):
     if s != orig:
         f.write_text(s, encoding='utf-8')
         n += 1
+for f in sorted(assets.glob('*.js.gz')):
+    s = gzip.decompress(f.read_bytes()).decode('utf-8')
+    s2 = s.replace('/api/', 'api/').replace('\\/api\\/', 'api\\/')
+    if s2 != s:
+        f.write_bytes(gzip.compress(s2.encode('utf-8'), 9, mtime=0))
+        n += 1
 if n == 0:
     print('    ✗ 没有 chunk 被改动（上游 bundle 结构变了？）', file=sys.stderr)
     sys.exit(1)
-print(f'    ✓ {n} 个 chunk 的 API 路径已改为相对（api/...）')
+print(f'    ✓ {n} 个 chunk 的 API 路径已改为相对（api/...，含 .js.gz）')
 PYEOF
 
     # 3e. 语法校验。node --check 与平台无关（纯 JS 语法），跨架构构建时用
@@ -779,7 +788,17 @@ PYEOF
         "$HOST_NODE" --check "$app/debian/bin/openbox-gateway.mjs"
         "$HOST_NODE" --check "$app/debian/bin/openbox-cf-tunnel.mjs"
         "$HOST_NODE" --check "$app/debian/bin/openbox-front.mjs"
-        for _objs in "$app/panel/dist/assets/"index-*.js; do
+        # v0.1.442 起主入口 chunk 预压缩为 index-*.js.gz：gunzip 到临时文件校验；
+        # 未压缩的 assets/*.js 一并校验
+        for _objs in "$app/panel/dist/assets/"index-*.js.gz; do
+            [ -e "$_objs" ] || continue
+            _tmp_js="$(mktemp /tmp/ob-check-XXXXXX.js)"
+            gzip -dc "$_objs" > "$_tmp_js"
+            "$HOST_NODE" --check "$_tmp_js"
+            rm -f "$_tmp_js"
+        done
+        for _objs in "$app/panel/dist/assets/"*.js; do
+            [ -e "$_objs" ] || continue
             "$HOST_NODE" --check "$_objs"
         done
         # index.html 内联脚本（无 src 的 script 块）逐个按 ESM 校验
@@ -857,7 +876,7 @@ PYEOF
     echo "    → 顶层条目: $(tar tzf "$outfpk" | grep -vE '/|app\.tgz' | tr '\n' ' ')"
     echo "    → 载荷关键文件:"
     tar xzOf "$outfpk" app.tgz 2>/dev/null | tar tz 2>/dev/null | grep -E \
-        -e '^bin/sing-box$' -e '^bin/cloudflared$' -e '^node/bin/node$' -e '^node/\.flavor$' \
+        -e '^bin/sing-box$' -e '^bin/mihomo$' -e '^bin/cloudflared$' -e '^node/bin/node$' -e '^node/\.flavor$' \
         -e '^debian/bin/openbox-(ctl|panel-ctl|panel-run|supervise|gateway|gateway\.mjs)$' \
         -e '^openwrt/bin/open-box$' -e '^panel/server/index.mjs$' \
         -e '^meta.json$' -e '^update.sh$' -e '^ui/config$' \
