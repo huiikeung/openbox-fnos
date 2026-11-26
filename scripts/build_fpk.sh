@@ -133,18 +133,17 @@ build_arch() {
     fi
 
     # 2. 解包 + glibc Node ──────────────────────────────────────────────────
-    echo "[2/6] 解包并替换 glibc Node 运行时 ..."
+    #    v0.1.463 起上游面板改纯 Go（bin/openbox-panel，meta.json panelRuntime=go-static，
+    #    发布包不再带 node/）——我们的 fnOS 本地助手（front/gateway/cf-tunnel）仍是
+    #    Node 脚本，继续随包一个独立 glibc Node（helper 专用，版本在脚本顶部定义）。
+    echo "[2/6] 解包 + 打包 helper 用 glibc Node ..."
     rm -rf "$stage"
     mkdir -p "$app"
     tar -xzf "$tarball" -C "$app"
 
     local node_ver node_arch node_txz node_dir
-    node_ver="$(sed -n 's/.*"nodeVersion" *: *"\([^"]*\)".*/\1/p' "$app/meta.json" | head -n1)"
+    node_ver="${HELPER_NODE_VER:-24.18.0}"
     node_arch="$(node_arch_of "$arch")"
-    if [ -z "$node_ver" ]; then
-        echo "错误: meta.json 中缺少 nodeVersion" >&2
-        exit 1
-    fi
     node_txz="node-v${node_ver}-linux-${node_arch}.tar.xz"
     node_dir="${NODE_CACHE}/node-v${node_ver}-linux-${node_arch}"
 
@@ -186,14 +185,12 @@ build_arch() {
         echo "    ✓ 复用 Node ${node_ver} (${node_arch})"
     fi
 
-    # 替换 musl Node：只留 glibc bin/node，删掉 musl 的 node/lib（与上游
-    # Debian 安装脚本一致：glibc Node 加载 musl 版 libstdc++ 会崩）
+    # helper 专用 glibc Node：放进 app/node/（我们的 front/gateway/cf-tunnel 用）
     mkdir -p "$app/node/bin"
     cp -f "${node_dir}/bin/node" "$app/node/bin/node"
     chmod 755 "$app/node/bin/node"
-    rm -rf "$app/node/lib"
-    printf 'glibc %s\n' "$node_ver" > "$app/node/.flavor"
-    echo "    ✓ Node ${node_ver} glibc (${node_arch}) 就绪"
+    printf 'glibc %s (helper-only, panel is pure Go since upstream v0.1.463)\n' "$node_ver" > "$app/node/.flavor"
+    echo "    ✓ helper Node ${node_ver} glibc (${node_arch}) 就绪"
 
     # 2b. cloudflared（Cloudflare 快捷隧道助手运行时，随架构；SHA256 校验）────
     local cf_asset cf_out cf_want
@@ -782,13 +779,12 @@ PYEOF
         HOST_NODE="$(ls "${NODE_CACHE}"/node-v*-linux-x64/bin/node 2>/dev/null | head -n1)"
     fi
     if [ -n "$HOST_NODE" ] && [ -x "$HOST_NODE" ]; then
-        "$HOST_NODE" --check "$app/panel/server/index.mjs"
-        # v0.1.326 起 system/conflicts.mjs 被打包进 bundle，不存在则跳过
-        [ -f "$app/panel/server/system/conflicts.mjs" ] && "$HOST_NODE" --check "$app/panel/server/system/conflicts.mjs"
+        # v0.1.463 起面板是纯 Go 二进制（bin/openbox-panel），无 node 服务端入口可校验；
+        # 只校验我们自己的 helper 脚本和前端 chunk（含预压缩 .js.gz）
         "$HOST_NODE" --check "$app/debian/bin/openbox-gateway.mjs"
         "$HOST_NODE" --check "$app/debian/bin/openbox-cf-tunnel.mjs"
         "$HOST_NODE" --check "$app/debian/bin/openbox-front.mjs"
-        # v0.1.442 起主入口 chunk 预压缩为 index-*.js.gz：gunzip 到临时文件校验；
+        # v0.1.442 起部分前端 chunk 预压缩为 *.js.gz：gunzip 到临时文件校验；
         # 未压缩的 assets/*.js 一并校验
         for _objs in "$app/panel/dist/assets/"index-*.js.gz; do
             [ -e "$_objs" ] || continue
@@ -827,7 +823,7 @@ PYEOF
     fi
     local want_em=62
     [ "$arch" = "arm64" ] && want_em=183
-    for _obbin in "$app/bin/sing-box" "$app/bin/cloudflared" "$app/node/bin/node"; do
+    for _obbin in "$app/bin/sing-box" "$app/bin/mihomo" "$app/bin/cloudflared" "$app/node/bin/node" "$app/bin/openbox-panel"; do
         local got_em
         got_em="$(od -An -tu1 -j18 -N1 "$_obbin" 2>/dev/null | tr -d ' ')"
         if [ "$got_em" != "$want_em" ]; then
@@ -876,9 +872,9 @@ PYEOF
     echo "    → 顶层条目: $(tar tzf "$outfpk" | grep -vE '/|app\.tgz' | tr '\n' ' ')"
     echo "    → 载荷关键文件:"
     tar xzOf "$outfpk" app.tgz 2>/dev/null | tar tz 2>/dev/null | grep -E \
-        -e '^bin/sing-box$' -e '^bin/mihomo$' -e '^bin/cloudflared$' -e '^node/bin/node$' -e '^node/\.flavor$' \
+        -e '^bin/sing-box$' -e '^bin/mihomo$' -e '^bin/openbox-panel$' -e '^bin/cloudflared$' -e '^node/bin/node$' -e '^node/\.flavor$' \
         -e '^debian/bin/openbox-(ctl|panel-ctl|panel-run|supervise|gateway|gateway\.mjs)$' \
-        -e '^openwrt/bin/open-box$' -e '^panel/server/index.mjs$' \
+        -e '^openwrt/bin/open-box$' \
         -e '^meta.json$' -e '^update.sh$' -e '^ui/config$' \
         | sed 's/^/      ✓ /' || echo "      ✗ app.tgz 内容检查失败"
     # node/update.sh 等不应出现

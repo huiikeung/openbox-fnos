@@ -34,7 +34,7 @@ IP 转发等系统层动作，与上游 Debian 版逐函数一致）；面板由
 ### 方式二：命令行（本机验证过）
 
 ```bash
-appcenter-cli install-fpk /path/to/fnnas.openbox-0.1.330-x64.fpk
+appcenter-cli install-fpk /path/to/fnnas.openbox-0.1.331-x64.fpk
 appcenter-cli start fnnas.openbox
 appcenter-cli status fnnas.openbox
 ```
@@ -52,7 +52,7 @@ appcenter-cli status fnnas.openbox
 
 # 指定版本 / 只构建一个架构 / 换上游版本
 ./scripts/build_fpk.sh 0.1.303 x64
-OPENBOX_TAG=v0.1.445 ./scripts/build_fpk.sh 0.1.330
+OPENBOX_TAG=v0.1.487 ./scripts/build_fpk.sh 0.1.331
 ```
 
 构建流程：下载上游发布包（SHA256 校验）→ 用 nodejs.org 官方 glibc Node 替换包内 musl 版
@@ -203,6 +203,24 @@ cat   /vol1/@appdata/fnnas.openbox/openbox.log            # fnOS 安装/服务�
 
 ## ✅ 真机验证记录（fnOS x86_64 / Debian 12）
 
+- [x] 升级至上游 v0.1.487（fpk 0.1.330→0.1.331，`OPENBOX_TAG=v0.1.487`，**纯 Go 面板时代**）：
+      uninstall 保留数据 + 重装后数据原样保留（app_storage 118 行，旧密码可直接登录）；meta.json=v0.1.487
+      （panelRuntime=go-static）、**sing-box 1.14.4-openbox-60 + Mihomo v1.19.34-openbox.22**（装机实测
+      确认）、Geo 2026-11-25（快照 324ef6b9）。**上游 v0.1.463/464 起面板改纯 Go**（bin/openbox-panel
+      静态二进制，最低 256MB 内存/存储，发布包不再带 node/ 与 panel/server；v0.1.446–477 发布说明已被
+      上游清理，变更脉络据 git 提交与现存 release 485–487 重建）。fnOS 适配：面板换 Go 二进制启动
+      （openbox-panel-run 重写，PORT/HOST/ZASHBOARD_DB_PATH 环境变量与 Node 版一致，内网 3037 不变）；
+      随包保留 helper 专用 Node 24.18.0 供前置代理/网关/Cloudflare 隧道助手运行；面板密码读取改走
+      Go 面板子命令（`openbox-panel password`，open-box CLI 上游已自带双兼容）；service-setup 停止
+      逻辑加 pkill openbox-panel/mihomo。上游主要变更（478–487）：指定域名 DNS（精确/后缀指定独立
+      直连上游 UDP/TCP/DoT/DoH，绕过 FakeIP #907）；登录模式定期更新加密保存凭据、自动登录刷新
+      订阅链接/流量/倍率并热更新内核，失败两级降级（484）；订阅自动同步节点专用 DNS；Debian 平台
+      新增「监听 DNS 53 端口」开关（#999，485）；启动预检第三方代理进程与 7891/7853/9095 端口占用
+      （#1002，486）；修复 Mihomo 分流归属识别与残留 inet mihomo 表清理（#996，487）；mihomo 新增
+      snell/mieru 协议（#967）；域名过滤名单按内存动态校验（#969）、Go RE2 不兼容正则修复；
+      自定义 FakeIP 网段；GOMEMLIMIT 自适应；订阅 UA 序列升级（#988）。实测：面板 API 部署 ok:true
+      19.0s（Go 面板时代较 Node 时代 11s 略慢）；fnoscf API 经前置代理 200；SS 局域网代理 https 204/
+      http 200；ctl running、TUN up；数据原样保留
 - [x] 升级至上游 v0.1.445（fpk 0.1.329→0.1.330，`OPENBOX_TAG=v0.1.445`，**双内核时代首个版本**）：
       uninstall 保留数据 + 重装后数据原样保留（app_storage 115 行，旧密码可直接登录）；meta.json=v0.1.445
       （新增 mihomoVersion 字段）、**sing-box 1.14.4-openbox-55（45→55）+ Mihomo v1.19.34-openbox.10

@@ -101,10 +101,12 @@ ob_stop_everything()
         OPENBOX_ROOT="${APP_DIR}" "${APP_DIR}/debian/bin/openbox-ctl" stop >> "${LOG_FILE}" 2>&1 || true
     fi
     pkill -x sing-box 2>/dev/null || true
-    pkill -f 'panel/server/index.mjs' 2>/dev/null || true
+    pkill -x mihomo 2>/dev/null || true
+    pkill -x openbox-panel 2>/dev/null || true
     pkill -f 'debian/bin/openbox-supervise' 2>/dev/null || true
     # 同源网关（自重启子壳 + node 本体）
     pkill -f 'debian/bin/openbox-gateway' 2>/dev/null || true
+    pkill -x openbox-panel 2>/dev/null || true
     if [ -f "${APP_DATA_DIR}/data/gateway.pid" ]; then
         kill "$(cat "${APP_DATA_DIR}/data/gateway.pid")" 2>/dev/null || true
     fi
